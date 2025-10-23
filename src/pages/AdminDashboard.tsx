@@ -164,8 +164,12 @@ const AdminDashboard = () => {
 
       const { quiz } = response;
 
-      // Generate QR code
-      const joinUrl = `${window.location.origin}/join/${quiz.code}`;
+      // Generate shareable join URL
+      const publicOrigin = import.meta.env?.VITE_PUBLIC_ORIGIN;
+      const baseOrigin = publicOrigin && typeof publicOrigin === 'string' && publicOrigin.trim().length > 0 
+        ? publicOrigin.trim() 
+        : window.location.origin;
+      const joinUrl = `${baseOrigin}/join/${quiz.code}`;
       const qrUrl = await QRCodeLib.toDataURL(joinUrl, {
         width: 400,
         margin: 2,
@@ -253,7 +257,9 @@ const AdminDashboard = () => {
               <div className="bg-secondary/30 backdrop-blur-sm p-4 rounded-xl animate-fade-in">
                 <p className="text-sm text-muted-foreground mb-2">Direct Link:</p>
                 <code className="text-xs sm:text-sm text-primary break-all">
-                  {window.location.origin}/join/{quizCode}
+                  {(import.meta.env?.VITE_PUBLIC_ORIGIN && typeof import.meta.env.VITE_PUBLIC_ORIGIN === 'string' && import.meta.env.VITE_PUBLIC_ORIGIN.trim().length > 0) 
+                    ? import.meta.env.VITE_PUBLIC_ORIGIN 
+                    : window.location.origin}/join/{quizCode}
                 </code>
               </div>
 

@@ -1,4 +1,19 @@
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+// Prefer explicit env, otherwise build a base URL using current hostname
+const getApiBaseUrl = () => {
+  try {
+    const envUrl = import.meta.env?.VITE_API_URL;
+    if (envUrl && typeof envUrl === 'string' && envUrl.trim().length > 0) {
+      return envUrl.trim();
+    }
+    // Fallback to current hostname with port 3001
+    return `${window.location.protocol}//${window.location.hostname}:3001/api`;
+  } catch (error) {
+    console.error('Error getting API URL:', error);
+    return `${window.location.protocol}//${window.location.hostname}:3001/api`;
+  }
+};
+
+const API_BASE_URL = getApiBaseUrl();
 
 // Helper function for API calls
 async function apiCall(endpoint: string, options: RequestInit = {}) {
