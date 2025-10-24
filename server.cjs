@@ -115,17 +115,31 @@ app.post('/api/auth/login', async (req, res) => {
 // ============= IMAGE UPLOAD ROUTE =============
 app.post('/api/upload/image', upload.single('image'), (req, res) => {
   try {
+    console.log('📸 Upload request received');
+    console.log('Content-Type:', req.headers['content-type']);
+    console.log('File:', req.file);
+    
     if (!req.file) {
+      console.error('❌ No file in request');
       return res.status(400).json({ message: 'No file uploaded' });
     }
     
     const imageUrl = `/uploads/${req.file.filename}`;
-    console.log('Image uploaded successfully:', imageUrl);
-    console.log('File saved to:', req.file.path);
-    res.status(200).json({ imageUrl });
+    console.log('✅ Image uploaded successfully:', imageUrl);
+    console.log('📁 File saved to:', req.file.path);
+    console.log('📊 File size:', req.file.size, 'bytes');
+    
+    res.status(200).json({ 
+      imageUrl,
+      filename: req.file.filename,
+      size: req.file.size
+    });
   } catch (error) {
-    console.error('Image upload error:', error);
-    res.status(500).json({ message: 'Failed to upload image' });
+    console.error('❌ Image upload error:', error);
+    res.status(500).json({ 
+      message: 'Failed to upload image',
+      error: error.message 
+    });
   }
 });
 
@@ -550,10 +564,30 @@ app.post('/api/feedback', async (req, res) => {
 
 // Add a simple health check endpoint
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'OK', timestamp: new Date().toISOString() });
+  try {
+    res.status(200).json({ 
+      status: 'OK',
+      timestamp: new Date().toISOString(),
+      mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+      uploadsDir: fs.existsSync(uploadsDir) ? 'exists' : 'missing',
+      endpoints: {
+        joinQuiz: '/api/join-quiz',
+        getParticipants: '/api/participants/:id',
+        submitResponse: '/api/responses/submit',
+        getResponses: '/api/responses/participant/:participantId',
+        getResults: '/api/results/:quizId/:participantId',
+        getLeaderboard: '/api/leaderboard/:quizId',
+        feedback: '/api/feedback'
+      }
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'ERROR',
+      message: error.message 
+    });
+  }
 });
 
-// Serve static files from dist
 app.use(express.static(path.join(__dirname, 'dist')));
 
 // Catch all handler: send back index.html for client-side routing
