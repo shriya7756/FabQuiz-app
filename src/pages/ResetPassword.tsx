@@ -15,12 +15,12 @@ const ResetPassword = () => {
     e.preventDefault();
     
     if (password !== confirmPassword) {
-      toast.error("Passwords do not match");
+      toast.error("Passwords do not match", { duration: 5000 });
       return;
     }
 
     if (password.length < 6) {
-      toast.error("Password must be at least 6 characters");
+      toast.error("Password must be at least 6 characters", { duration: 5000 });
       return;
     }
 
@@ -28,10 +28,10 @@ const ResetPassword = () => {
 
     try {
       // Password reset functionality to be implemented
-      toast.info("Password reset feature not implemented yet");
+      toast.info("Password reset feature not implemented yet", { duration: 5000 });
       navigate("/");
     } catch (error: any) {
-      toast.error(error.message || "Failed to reset password");
+      toast.error(error.message || "Failed to reset password", { duration: 5000 });
     } finally {
       setLoading(false);
     }

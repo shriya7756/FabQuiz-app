@@ -4,12 +4,13 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
 import { Clock, Zap } from "lucide-react";
-import { quizApi, responseApi } from "@/lib/api";
+import { quizApi, responseApi, getImageUrl } from "@/lib/api";
 
 interface Question {
   _id: string;
   id?: string;
   question_text: string;
+  image_url?: string;
   marks: number;
   time_limit: number;
   options: Array<{
@@ -56,12 +57,21 @@ const ParticipantQuiz = () => {
       // Fetch quiz from MongoDB using quiz ID
       const { quiz: quizData } = await quizApi.getById(quizId!);
       
+      console.log('📥 Quiz data loaded:', quizData);
+      console.log('📊 Total questions:', quizData.questions?.length);
+      console.log('🖼️ Questions with images:', quizData.questions?.map((q: any) => ({
+        text: q.question_text?.substring(0, 50) + '...',
+        hasImage: !!q.image_url,
+        imageUrl: q.image_url,
+        fullUrl: q.image_url ? `http://localhost:3001${q.image_url}` : 'No image'
+      })));
+      
       setQuiz(quizData);
       setQuestions(quizData.questions || []);
       setTimeLeft(quizData.questions?.[0]?.time_limit || 30);
       setIsWaiting(false);
     } catch (error) {
-      console.error('Failed to load quiz:', error);
+      console.error('❌ Failed to load quiz:', error);
       toast.error("Failed to load quiz. Please try again.", { duration: 5000 });
       setTimeout(() => navigate('/'), 2000);
     }
@@ -128,6 +138,15 @@ const ParticipantQuiz = () => {
   }
 
   const currentQuestion = questions[currentQuestionIndex];
+  
+  // Debug: Log current question image info
+  if (currentQuestion.image_url) {
+    console.log('Current question has image:', {
+      questionText: currentQuestion.question_text,
+      imageUrl: currentQuestion.image_url,
+      fullImageUrl: getImageUrl(currentQuestion.image_url)
+    });
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground p-4 sm:p-6 relative overflow-hidden">
@@ -178,6 +197,54 @@ const ParticipantQuiz = () => {
           <h2 className="text-xl sm:text-2xl lg:text-3xl font-bold mb-6 sm:mb-8 text-primary break-words leading-relaxed">
             {currentQuestion.question_text}
           </h2>
+          
+          {/* Question Image */}
+          {currentQuestion.image_url && (() => {
+            // Build image URL with multiple fallbacks
+            let imageUrl = getImageUrl(currentQuestion.image_url);
+            
+            // Fallback 1: Direct construction
+            if (!imageUrl && currentQuestion.image_url.startsWith('/')) {
+              imageUrl = `http://localhost:3001${currentQuestion.image_url}`;
+            }
+            
+            // Fallback 2: Use as-is
+            if (!imageUrl) {
+              imageUrl = currentQuestion.image_url;
+            }
+            
+            console.log('🖼️ Displaying image:', {
+              original: currentQuestion.image_url,
+              computed: imageUrl,
+              question: currentQuestion.question_text.substring(0, 50)
+            });
+            
+            return (
+              <div className="mb-6 sm:mb-8 flex justify-center">
+                <img 
+                  src={imageUrl} 
+                  alt="Question" 
+                  className="max-w-full h-auto max-h-96 rounded-lg border-2 border-border shadow-lg"
+                  crossOrigin="anonymous"
+                  onLoad={() => {
+                    console.log('✅ Image loaded successfully!', imageUrl);
+                  }}
+                  onError={(e) => {
+                    console.error('❌ Failed to load image!');
+                    console.error('Original URL:', currentQuestion.image_url);
+                    console.error('Attempted URL:', imageUrl);
+                    console.error('Server should be: http://localhost:3001');
+                    // Try alternative URL as last resort
+                    const fallbackUrl = `http://localhost:3001${currentQuestion.image_url}`;
+                    if (e.currentTarget.src !== fallbackUrl) {
+                      console.log('🔄 Trying fallback URL:', fallbackUrl);
+                      e.currentTarget.src = fallbackUrl;
+                    }
+                  }}
+                />
+              </div>
+            );
+          })()}
 
           <div className="space-y-3 sm:space-y-4">
             {currentQuestion.options.map((option, idx) => (

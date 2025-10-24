@@ -15,6 +15,34 @@ const getApiBaseUrl = () => {
 
 const API_BASE_URL = getApiBaseUrl();
 
+// Helper function to get full image URL
+export const getImageUrl = (imageUrl: string | null | undefined): string | null => {
+  if (!imageUrl) {
+    console.log('getImageUrl: No image URL provided');
+    return null;
+  }
+  
+  // If it's already a full URL, return as is
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+    console.log('getImageUrl: Using full URL:', imageUrl);
+    return imageUrl;
+  }
+  
+  // If it's a relative path, construct full URL
+  if (imageUrl.startsWith('/')) {
+    // Get base server URL (without /api)
+    const protocol = window.location.protocol;
+    const hostname = window.location.hostname;
+    const serverUrl = `${protocol}//${hostname}:3001`;
+    const fullUrl = `${serverUrl}${imageUrl}`;
+    console.log('getImageUrl: Constructed URL:', fullUrl, 'from', imageUrl);
+    return fullUrl;
+  }
+  
+  console.log('getImageUrl: Using as-is:', imageUrl);
+  return imageUrl;
+};
+
 // Helper function for API calls
 async function apiCall(endpoint: string, options: RequestInit = {}) {
   const url = `${API_BASE_URL}${endpoint}`;
@@ -126,5 +154,26 @@ export const feedbackApi = {
       method: 'POST',
       body: JSON.stringify({ rating, comment }),
     });
+  },
+};
+
+// ============= IMAGE UPLOAD API =============
+export const imageApi = {
+  upload: async (file: File) => {
+    const formData = new FormData();
+    formData.append('image', file);
+    
+    const url = `${API_BASE_URL}/upload/image`;
+    const response = await fetch(url, {
+      method: 'POST',
+      body: formData,
+    });
+    
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({ message: 'Upload failed' }));
+      throw new Error(error.message || 'Upload failed');
+    }
+    
+    return response.json();
   },
 };

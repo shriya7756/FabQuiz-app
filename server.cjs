@@ -2,6 +2,8 @@ const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const path = require('path');
+const multer = require('multer');
+const fs = require('fs');
 require('dotenv').config();
 
 // Import models
@@ -16,8 +18,57 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 
 // Middleware
-app.use(cors());
-app.use(express.json());
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// Create uploads directory if it doesn't exist
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// Serve uploaded files with logging
+app.use('/uploads', (req, res, next) => {
+  console.log('Image request:', req.url);
+  next();
+}, express.static(uploadsDir, {
+  setHeaders: (res, path) => {
+    res.set('Access-Control-Allow-Origin', '*');
+    res.set('Cache-Control', 'public, max-age=31536000');
+  }
+}));
+
+// Configure multer for image uploads
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, uploadsDir);
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    cb(null, 'question-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  fileFilter: (req, file, cb) => {
+    const allowedTypes = /jpeg|jpg|png|gif|webp/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    if (extname && mimetype) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  }
+});
 
 // MongoDB connection
 if (process.env.MONGODB_URI) {
@@ -61,6 +112,38 @@ app.post('/api/auth/login', async (req, res) => {
   }
 });
 
+// ============= IMAGE UPLOAD ROUTE =============
+app.post('/api/upload/image', upload.single('image'), (req, res) => {
+  try {
+    if (!req.file) {
+      return res.status(400).json({ message: 'No file uploaded' });
+    }
+    
+    const imageUrl = `/uploads/${req.file.filename}`;
+    console.log('Image uploaded successfully:', imageUrl);
+    console.log('File saved to:', req.file.path);
+    res.status(200).json({ imageUrl });
+  } catch (error) {
+    console.error('Image upload error:', error);
+    res.status(500).json({ message: 'Failed to upload image' });
+  }
+});
+
+// Test endpoint to list uploaded images
+app.get('/api/uploads/list', (req, res) => {
+  try {
+    const files = fs.readdirSync(uploadsDir);
+    res.status(200).json({ 
+      uploadsDir,
+      files,
+      count: files.length 
+    });
+  } catch (error) {
+    console.error('List uploads error:', error);
+    res.status(500).json({ message: 'Failed to list uploads' });
+  }
+});
+
 // ============= QUIZ ROUTES =============
 app.post('/api/quizzes/create', async (req, res) => {
   try {
@@ -70,9 +153,14 @@ app.post('/api/quizzes/create', async (req, res) => {
       return res.status(400).json({ message: 'Missing required fields' });
     }
 
+    if (!Array.isArray(questions) || questions.length === 0) {
+      return res.status(400).json({ message: 'At least one question is required' });
+    }
+
     // Generate unique quiz code
     const quizCode = Math.random().toString(36).substring(2, 8).toUpperCase();
 
+    // Create quiz and questions in parallel for better performance
     const quiz = await Quiz.create({
       code: quizCode,
       title,
@@ -80,22 +168,27 @@ app.post('/api/quizzes/create', async (req, res) => {
       status: 'active',
     });
 
-    // Create questions
-    const questionDocs = await Promise.all(
-      questions.map((q, index) =>
-        Question.create({
-          quizId: quiz._id,
-          questionText: q.question_text,
-          options: q.options.map((opt) => ({
-            optionText: opt.option_text,
-            isCorrect: opt.is_correct,
-          })),
-          marks: q.marks || 1,
-          timeLimit: q.time_limit || 30,
-          order: index,
-        })
-      )
-    );
+    // Batch create questions for better performance
+    const questionData = questions.map((q, index) => ({
+      quizId: quiz._id,
+      questionText: q.question_text,
+      imageUrl: q.image_url || null,
+      options: q.options.map((opt) => ({
+        optionText: opt.option_text,
+        isCorrect: opt.is_correct,
+      })),
+      marks: q.marks || 1,
+      timeLimit: q.time_limit || 30,
+      order: index,
+    }));
+    
+    console.log('Creating questions with images:', questionData.map(q => ({
+      text: q.questionText.substring(0, 50),
+      hasImage: !!q.imageUrl,
+      imageUrl: q.imageUrl
+    })));
+    
+    const questionDocs = await Question.insertMany(questionData);
 
     res.status(201).json({
       quiz: {
@@ -106,6 +199,7 @@ app.post('/api/quizzes/create', async (req, res) => {
         questions: questionDocs.map(q => ({
           _id: q._id,
           questionText: q.questionText,
+          imageUrl: q.imageUrl,
           options: q.options,
           marks: q.marks,
           timeLimit: q.timeLimit,
@@ -114,7 +208,7 @@ app.post('/api/quizzes/create', async (req, res) => {
     });
   } catch (error) {
     console.error('Create quiz error:', error);
-    res.status(500).json({ message: 'Internal server error' });
+    res.status(500).json({ message: error.message || 'Internal server error' });
   }
 });
 
@@ -131,6 +225,13 @@ app.get('/api/quizzes/code/:code', async (req, res) => {
 
     const questions = await Question.find({ quizId: quiz._id }).sort({ order: 1 });
 
+    console.log('Returning quiz by code:', code);
+    console.log('Questions with images:', questions.map(q => ({
+      text: q.questionText.substring(0, 50),
+      hasImage: !!q.imageUrl,
+      imageUrl: q.imageUrl
+    })));
+
     res.status(200).json({
       quiz: {
         _id: quiz._id,
@@ -140,6 +241,7 @@ app.get('/api/quizzes/code/:code', async (req, res) => {
         questions: questions.map(q => ({
           _id: q._id,
           question_text: q.questionText,
+          image_url: q.imageUrl,
           marks: q.marks,
           time_limit: q.timeLimit,
           options: q.options.map(o => ({ 
@@ -169,6 +271,14 @@ app.get('/api/quizzes/id/:id', async (req, res) => {
 
     const questions = await Question.find({ quizId: quiz._id }).sort({ order: 1 });
 
+    console.log('📤 GET /api/quizzes/id/' + id);
+    console.log('📊 Questions from DB:', questions.map(q => ({
+      id: q._id,
+      text: q.questionText?.substring(0, 30),
+      hasImageUrl: !!q.imageUrl,
+      imageUrl: q.imageUrl || 'NO IMAGE URL IN DB'
+    })));
+
     res.status(200).json({
       quiz: {
         _id: quiz._id,
@@ -178,6 +288,7 @@ app.get('/api/quizzes/id/:id', async (req, res) => {
         questions: questions.map(q => ({
           _id: q._id,
           question_text: q.questionText,
+          image_url: q.imageUrl,
           marks: q.marks,
           time_limit: q.timeLimit,
           options: q.options.map(o => ({ 
