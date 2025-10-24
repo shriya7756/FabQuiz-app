@@ -28,13 +28,11 @@ export const getImageUrl = (imageUrl: string | null | undefined): string | null 
     return imageUrl;
   }
   
-  // If it's a relative path, construct full URL
+  // If it's a relative path, construct full URL using backend URL
   if (imageUrl.startsWith('/')) {
-    // Get base server URL (without /api)
-    const protocol = window.location.protocol;
-    const hostname = window.location.hostname;
-    const serverUrl = `${protocol}//${hostname}:3001`;
-    const fullUrl = `${serverUrl}${imageUrl}`;
+    // Get backend base URL (remove /api from API_BASE_URL)
+    const backendUrl = API_BASE_URL.replace('/api', '');
+    const fullUrl = `${backendUrl}${imageUrl}`;
     console.log('getImageUrl: Constructed URL:', fullUrl, 'from', imageUrl);
     return fullUrl;
   }
