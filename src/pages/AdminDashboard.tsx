@@ -5,14 +5,15 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { toast } from "sonner";
-import { Plus, X, Check, QrCode, Copy, Home, LogOut, Sparkles } from "lucide-react";
+import { Plus, X, Check, QrCode, Copy, Home, LogOut, Sparkles, Upload, Trash2 } from "lucide-react";
 import QRCodeLib from "qrcode";
-import { quizApi } from "@/lib/api";
+import { quizApi, imageApi, getImageUrl } from "@/lib/api";
 
 interface Question {
   question_text: string;
   marks: number;
   time_limit: number;
+  image_url?: string;
   options: { text: string; is_correct: boolean }[];
 }
 
@@ -24,8 +25,10 @@ const AdminDashboard = () => {
     question_text: "",
     marks: 1,
     time_limit: 30,
+    image_url: undefined,
     options: [{ text: "", is_correct: false }],
   });
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [quizCode, setQuizCode] = useState<string | null>(null);
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [quizId, setQuizId] = useState<string | null>(null);
@@ -115,6 +118,7 @@ const AdminDashboard = () => {
       question_text: currentQuestion.question_text.trim(),
       marks: currentQuestion.marks,
       time_limit: currentQuestion.time_limit,
+      image_url: currentQuestion.image_url, // Include the uploaded image URL
       options: validOptions,
     };
 
@@ -123,6 +127,7 @@ const AdminDashboard = () => {
       question_text: "",
       marks: 1,
       time_limit: 30,
+      image_url: undefined,
       options: [{ text: "", is_correct: false }],
     });
     toast.success("✅ Question added successfully!", { duration: 4000 });
@@ -132,20 +137,56 @@ const AdminDashboard = () => {
     return Math.random().toString(36).substring(2, 8).toUpperCase();
   };
 
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    // Validate file size (5MB)
+    if (file.size > 5 * 1024 * 1024) {
+      toast.error("Image size must be less than 5MB", { duration: 5000 });
+      return;
+    }
+
+    // Validate file type
+    if (!file.type.startsWith('image/')) {
+      toast.error("Please upload an image file", { duration: 5000 });
+      return;
+    }
+
+    setUploadingImage(true);
+    try {
+      const { imageUrl } = await imageApi.upload(file);
+      setCurrentQuestion({ ...currentQuestion, image_url: imageUrl });
+      toast.success("✅ Image uploaded successfully!", { duration: 4000 });
+    } catch (error: any) {
+      console.error('Image upload error:', error);
+      toast.error(error.message || "Failed to upload image", { duration: 5000 });
+    } finally {
+      setUploadingImage(false);
+    }
+  };
+
+  const removeImage = () => {
+    setCurrentQuestion({ ...currentQuestion, image_url: undefined });
+    toast.success("Image removed", { duration: 4000 });
+  };
+
   const handleDone = async () => {
     if (questions.length === 0) {
       toast.error("Add at least one question", { duration: 5000 });
       return;
     }
 
+    const loadingToast = toast.loading("Creating your quiz...");
+    
     try {
-      toast.loading("Creating your quiz...", { duration: Infinity });
 
       // Format questions for MongoDB
       const formattedQuestions = questions.map((q) => ({
         question_text: q.question_text,
         marks: q.marks,
         time_limit: q.time_limit,
+        image_url: q.image_url || null,
         options: q.options.map((opt) => ({
           option_text: opt.text,
           is_correct: opt.is_correct,
@@ -163,6 +204,10 @@ const AdminDashboard = () => {
       );
 
       const { quiz } = response;
+      
+      if (!quiz || !quiz.code) {
+        throw new Error('Invalid response from server');
+      }
 
       // Generate shareable join URL
       const publicOrigin = import.meta.env?.VITE_PUBLIC_ORIGIN;
@@ -183,12 +228,12 @@ const AdminDashboard = () => {
       setQrCodeUrl(qrUrl);
       setQuizId(quiz._id);
 
-      toast.dismiss();
+      toast.dismiss(loadingToast);
       toast.success("🎉 Quiz created successfully!", { duration: 5000 });
     } catch (error: any) {
       console.error("Error creating quiz:", error);
-      toast.dismiss();
-      toast.error(error.message || "Failed to create quiz", { duration: 6000 });
+      toast.dismiss(loadingToast);
+      toast.error(error.message || "Failed to create quiz. Please try again.", { duration: 6000 });
     }
   };
 
@@ -227,16 +272,16 @@ const AdminDashboard = () => {
             <p className="text-muted-foreground mb-6 sm:mb-8 text-sm sm:text-base animate-fade-in">Share this code with your participants</p>
             
             {/* QR Code */}
-            <div className="bg-white p-6 sm:p-8 rounded-2xl inline-block mb-6 sm:mb-8 shadow-lg hover-scale animate-fade-in-up">
-              <img src={qrCodeUrl} alt="QR Code" className="w-48 h-48 sm:w-64 sm:h-64" />
+            <div className="bg-white p-4 sm:p-6 md:p-8 rounded-2xl inline-block mb-6 sm:mb-8 shadow-lg hover-scale animate-fade-in-up">
+              <img src={qrCodeUrl} alt="QR Code" className="w-40 h-40 sm:w-56 sm:h-56 md:w-64 md:h-64" />
             </div>
 
             {/* Quiz Code */}
             <div className="space-y-4 sm:space-y-6">
               <div className="animate-slide-in-right">
-                <Label className="text-base sm:text-lg font-semibold text-muted-foreground">Quiz Code</Label>
-                <div className="flex flex-col sm:flex-row gap-2 justify-center mt-3">
-                  <code className="text-3xl sm:text-5xl font-bold text-primary bg-secondary/80 backdrop-blur-sm px-6 sm:px-10 py-3 sm:py-5 rounded-2xl shadow-lg border-2 border-primary/20 tracking-wider hover-glow">
+                <Label className="text-sm sm:text-base md:text-lg font-semibold text-muted-foreground">Quiz Code</Label>
+                <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 justify-center items-center mt-3">
+                  <code className="text-2xl sm:text-4xl md:text-5xl font-bold text-primary bg-secondary/80 backdrop-blur-sm px-4 sm:px-8 md:px-10 py-2 sm:py-4 md:py-5 rounded-xl sm:rounded-2xl shadow-lg border-2 border-primary/20 tracking-wider hover-glow">
                     {quizCode}
                   </code>
                   <Button
@@ -246,21 +291,37 @@ const AdminDashboard = () => {
                       navigator.clipboard.writeText(quizCode);
                       toast.success("📋 Code copied to clipboard!", { duration: 4000 });
                     }}
-                    className="hover-scale border-2 border-primary/30 hover:border-primary"
+                    className="hover-scale border-2 border-primary/30 hover:border-primary h-10 w-10 sm:h-12 sm:w-12"
                   >
-                    <Copy className="h-5 w-5" />
+                    <Copy className="h-4 w-4 sm:h-5 sm:w-5" />
                   </Button>
                 </div>
               </div>
 
               {/* Share URL */}
-              <div className="bg-secondary/30 backdrop-blur-sm p-4 rounded-xl animate-fade-in">
-                <p className="text-sm text-muted-foreground mb-2">Direct Link:</p>
-                <code className="text-xs sm:text-sm text-primary break-all">
-                  {(import.meta.env?.VITE_PUBLIC_ORIGIN && typeof import.meta.env.VITE_PUBLIC_ORIGIN === 'string' && import.meta.env.VITE_PUBLIC_ORIGIN.trim().length > 0) 
-                    ? import.meta.env.VITE_PUBLIC_ORIGIN 
-                    : window.location.origin}/join/{quizCode}
-                </code>
+              <div className="bg-secondary/30 backdrop-blur-sm p-3 sm:p-4 rounded-xl animate-fade-in">
+                <p className="text-xs sm:text-sm text-muted-foreground mb-2 font-medium">Direct Link:</p>
+                <div className="flex items-center gap-2">
+                  <code className="text-xs sm:text-sm text-primary break-all flex-1 bg-background/50 p-2 rounded">
+                    {(import.meta.env?.VITE_PUBLIC_ORIGIN && typeof import.meta.env.VITE_PUBLIC_ORIGIN === 'string' && import.meta.env.VITE_PUBLIC_ORIGIN.trim().length > 0) 
+                      ? import.meta.env.VITE_PUBLIC_ORIGIN 
+                      : window.location.origin}/join/{quizCode}
+                  </code>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={() => {
+                      const url = `${(import.meta.env?.VITE_PUBLIC_ORIGIN && typeof import.meta.env.VITE_PUBLIC_ORIGIN === 'string' && import.meta.env.VITE_PUBLIC_ORIGIN.trim().length > 0) 
+                        ? import.meta.env.VITE_PUBLIC_ORIGIN 
+                        : window.location.origin}/join/${quizCode}`;
+                      navigator.clipboard.writeText(url);
+                      toast.success("🔗 Link copied to clipboard!", { duration: 4000 });
+                    }}
+                    className="hover-scale flex-shrink-0"
+                  >
+                    <Copy className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
 
               <Button
@@ -315,6 +376,57 @@ const AdminDashboard = () => {
                 placeholder="Enter your question"
                 className="mt-2"
               />
+            </div>
+
+            {/* Image Upload Section */}
+            <div>
+              <Label>Question Image (Optional)</Label>
+              <div className="mt-2 space-y-3">
+                {currentQuestion.image_url && getImageUrl(currentQuestion.image_url) ? (
+                  <div className="relative inline-block">
+                    <img 
+                      src={getImageUrl(currentQuestion.image_url)!} 
+                      alt="Question Preview" 
+                      className="max-w-full h-auto max-h-64 rounded-lg border-2 border-border"
+                      onError={(e) => {
+                        console.error('Failed to load image preview:', currentQuestion.image_url);
+                        toast.error("Failed to load image preview", { duration: 5000 });
+                      }}
+                    />
+                    <Button
+                      size="icon"
+                      variant="destructive"
+                      onClick={removeImage}
+                      className="absolute top-2 right-2 shadow-lg"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleImageUpload}
+                      disabled={uploadingImage}
+                      className="flex-1"
+                      id="image-upload"
+                    />
+                    <Button
+                      variant="outline"
+                      disabled={uploadingImage}
+                      onClick={() => document.getElementById('image-upload')?.click()}
+                      className="whitespace-nowrap"
+                    >
+                      <Upload className="mr-2 h-4 w-4" />
+                      {uploadingImage ? "Uploading..." : "Upload Image"}
+                    </Button>
+                  </div>
+                )}
+                <p className="text-xs text-muted-foreground">
+                  Supported formats: JPG, PNG, GIF, WebP (Max 5MB)
+                </p>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

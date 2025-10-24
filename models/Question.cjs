@@ -21,6 +21,10 @@ const questionSchema = new mongoose.Schema({
     type: String,
     required: true,
   },
+  imageUrl: {
+    type: String,
+    default: null,
+  },
   options: [optionSchema],
   marks: {
     type: Number,

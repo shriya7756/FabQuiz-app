@@ -28,7 +28,7 @@ const Feedback = () => {
 
   const handleSubmit = async () => {
     if (!feedback.trim()) {
-      toast.error("Please enter your feedback");
+      toast.error("Please enter your feedback", { duration: 5000 });
       return;
     }
 
