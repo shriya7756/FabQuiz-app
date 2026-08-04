@@ -25,7 +25,7 @@ const ParticipantQuiz = () => {
   const { quizId, participantId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
-  const [quiz, setQuiz] = useState<any>(null);
+  const [quiz, setQuiz] = useState<Record<string, unknown> | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
   const [selectedOption, setSelectedOption] = useState<string | null>(null);
@@ -59,7 +59,7 @@ const ParticipantQuiz = () => {
       
       console.log('📥 Quiz data loaded:', quizData);
       console.log('📊 Total questions:', quizData.questions?.length);
-      console.log('🖼️ Questions with images:', quizData.questions?.map((q: any) => ({
+      console.log('🖼️ Questions with images:', quizData.questions?.map((q: { question_text?: string; image_url?: string }) => ({
         text: q.question_text?.substring(0, 50) + '...',
         hasImage: !!q.image_url,
         imageUrl: q.image_url,
@@ -107,7 +107,7 @@ const ParticipantQuiz = () => {
           navigate(`/results/${quizId}/${participantId}`);
         }, 500);
       }
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error submitting answer:", error);
       toast.error("Failed to submit answer. Please try again.", { duration: 5000 });
     }

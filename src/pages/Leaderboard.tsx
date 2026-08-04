@@ -15,7 +15,7 @@ interface LeaderboardEntry {
 
 const Leaderboard = () => {
   const navigate = useNavigate();
-  const [quizzes, setQuizzes] = useState<any[]>([]);
+  const [quizzes, setQuizzes] = useState<{ _id: string; title?: string; code?: string }[]>([]);
   const [selectedQuizId, setSelectedQuizId] = useState<string>("");
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 
@@ -46,7 +46,7 @@ const Leaderboard = () => {
     try {
       const data = await leaderboardApi.get(quizId);
       
-      const leaderboardData = data.leaderboard.map((entry: any, idx: number) => ({
+      const leaderboardData = data.leaderboard.map((entry: { name: string; score: number; accuracy: number }, idx: number) => ({
         name: entry.name,
         score: entry.score,
         accuracy: entry.accuracy,

@@ -35,9 +35,14 @@ const Results = () => {
       setTotalQuestions(data.totalQuestions);
       setAccuracy(data.accuracy);
       
-      const reviews = data.responses.map((r: any) => {
-        const selectedOption = r.options.find((opt: any) => opt._id === r.selectedOptionId);
-        const correctOption = r.options.find((opt: any) => opt.isCorrect);
+      const reviews = data.responses.map((r: {
+        options: { _id: string; isCorrect: boolean; optionText: string }[];
+        selectedOptionId: string;
+        questionText: string;
+        isCorrect: boolean;
+      }) => {
+        const selectedOption = r.options.find((opt) => opt._id === r.selectedOptionId);
+        const correctOption = r.options.find((opt) => opt.isCorrect);
         
         return {
           questionText: r.questionText,

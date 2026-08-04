@@ -99,14 +99,14 @@ const JoinQuiz = () => {
       navigate(`/quiz/${quiz._id}/participant/${participant._id}`, {
         state: { participantName: formData.name.trim() },
       });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error joining quiz:", error);
       
       // Handle duplicate participant
-      if (error.message.includes('already joined')) {
+      if (error instanceof Error && error.message.includes('already joined')) {
         toast.error("⚠️ You have already joined this quiz! Each person can only participate once.", { duration: 6000 });
       } else {
-        toast.error(error.message || "Failed to join quiz. Please try again.", { duration: 5000 });
+        toast.error(error instanceof Error ? error.message : "Failed to join quiz. Please try again.", { duration: 5000 });
       }
     } finally {
       setLoading(false);
