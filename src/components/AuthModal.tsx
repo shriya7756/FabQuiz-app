@@ -13,6 +13,7 @@ interface AuthModalProps {
   onSuccess: () => void;
 }
 
+// Authentication Modal Component
 export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
