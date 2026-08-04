@@ -34,7 +34,7 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     let totalPossibleScore = 0;
 
     // Process responses and calculate score
-    const processedResponses = responses.map((response: any) => {
+    const processedResponses = responses.map((response: { questionId: string; selectedOptionId: string; timeTaken?: number }) => {
       const question = quiz.questions.id(response.questionId);
       if (!question) return null;
 

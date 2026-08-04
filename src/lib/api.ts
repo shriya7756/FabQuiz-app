@@ -75,7 +75,7 @@ export const authApi = {
 
 // ============= QUIZ API =============
 export const quizApi = {
-  create: async (title: string, questions: any[], adminId: string) => {
+  create: async (title: string, questions: unknown[], adminId: string) => {
     return apiCall('/quizzes/create', {
       method: 'POST',
       body: JSON.stringify({ title, questions, adminId }),
