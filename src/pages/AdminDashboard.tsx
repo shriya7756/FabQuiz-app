@@ -19,7 +19,7 @@ interface Question {
 
 const AdminDashboard = () => {
   const navigate = useNavigate();
-  const [user, setUser] = useState<any>(null);
+  const [user, setUser] = useState<Record<string, unknown> | null>(null);
   const [questions, setQuestions] = useState<Question[]>([]);
   const [currentQuestion, setCurrentQuestion] = useState<Question>({
     question_text: "",
@@ -158,9 +158,9 @@ const AdminDashboard = () => {
       const { imageUrl } = await imageApi.upload(file);
       setCurrentQuestion({ ...currentQuestion, image_url: imageUrl });
       toast.success("✅ Image uploaded successfully!", { duration: 4000 });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Image upload error:', error);
-      toast.error(error.message || "Failed to upload image", { duration: 5000 });
+      toast.error(error instanceof Error ? error.message : "Failed to upload image", { duration: 5000 });
     } finally {
       setUploadingImage(false);
     }
@@ -230,10 +230,10 @@ const AdminDashboard = () => {
 
       toast.dismiss(loadingToast);
       toast.success("🎉 Quiz created successfully!", { duration: 5000 });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Error creating quiz:", error);
       toast.dismiss(loadingToast);
-      toast.error(error.message || "Failed to create quiz. Please try again.", { duration: 6000 });
+      toast.error(error instanceof Error ? error.message : "Failed to create quiz. Please try again.", { duration: 6000 });
     }
   };
 

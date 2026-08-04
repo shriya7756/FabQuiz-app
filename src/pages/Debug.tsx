@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 
 const Debug = () => {
-  const [info, setInfo] = useState<any>({});
+  const [info, setInfo] = useState<Record<string, unknown>>({});
   const [apiTest, setApiTest] = useState<string>('Testing...');
 
   useEffect(() => {
@@ -29,8 +29,8 @@ const Debug = () => {
         const response = await fetch(`${apiUrl.replace('/api', '')}/health`);
         const data = await response.json();
         setApiTest(`✅ Backend OK: ${JSON.stringify(data)}`);
-      } catch (error: any) {
-        setApiTest(`❌ Backend Error: ${error.message}`);
+      } catch (error: unknown) {
+        setApiTest(`❌ Backend Error: ${error instanceof Error ? error.message : String(error)}`);
       }
     };
     testApi();

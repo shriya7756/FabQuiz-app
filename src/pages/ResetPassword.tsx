@@ -30,8 +30,8 @@ const ResetPassword = () => {
       // Password reset functionality to be implemented
       toast.info("Password reset feature not implemented yet", { duration: 5000 });
       navigate("/");
-    } catch (error: any) {
-      toast.error(error.message || "Failed to reset password", { duration: 5000 });
+    } catch (error: unknown) {
+      toast.error(error instanceof Error ? error.message : "Failed to reset password", { duration: 5000 });
     } finally {
       setLoading(false);
     }
