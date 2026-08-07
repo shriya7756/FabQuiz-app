@@ -187,13 +187,40 @@ const upload = multer({
 });
 
 // ============= MONGODB CONNECTION =============
+// Disable command buffering — fail fast instead of timing out after 10s
+mongoose.set('bufferCommands', false);
+
 if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log('✅ Connected to MongoDB'))
-    .catch(err => console.error('❌ MongoDB connection error:', err));
+  mongoose.connect(process.env.MONGODB_URI, {
+    serverSelectionTimeoutMS: 10000,
+    socketTimeoutMS: 45000,
+    connectTimeoutMS: 10000,
+    maxPoolSize: 10,
+  })
+    .then(() => console.log('✅ Connected to MongoDB Atlas'))
+    .catch(err => {
+      console.error('❌ MongoDB connection failed:', err.message);
+      console.error('👉 Fix: Go to MongoDB Atlas → Network Access → Add IP: 0.0.0.0/0 (Allow from anywhere)');
+    });
+
+  // Log connection state changes
+  mongoose.connection.on('connected', () => console.log('✅ MongoDB connected'));
+  mongoose.connection.on('disconnected', () => console.warn('⚠️  MongoDB disconnected — retrying...'));
+  mongoose.connection.on('error', (err) => console.error('❌ MongoDB error:', err.message));
 } else {
-  console.warn('⚠️  No MONGODB_URI found — running without MongoDB (all DB calls will fail)');
+  console.warn('⚠️  No MONGODB_URI found — all DB calls will fail');
 }
+
+// Middleware: reject DB-dependent requests immediately if not connected
+const requireDB = (req, res, next) => {
+  if (mongoose.connection.readyState !== 1) {
+    return res.status(503).json({
+      message: 'Database not connected. Check MongoDB Atlas IP whitelist (allow 0.0.0.0/0) and restart the server.',
+      dbState: ['disconnected','connected','connecting','disconnecting'][mongoose.connection.readyState] || 'unknown',
+    });
+  }
+  next();
+};
 
 // ============= AUTH ROUTES =============
 app.post('/api/auth/login', async (req, res) => {
@@ -242,7 +269,7 @@ app.get('/api/uploads/list', (req, res) => {
 });
 
 // ============= QUIZ ROUTES =============
-app.post('/api/quizzes/create', async (req, res) => {
+app.post('/api/quizzes/create', requireDB, async (req, res) => {
   try {
     const { title, questions, adminId } = req.body;
     if (!title || !questions || !adminId) return res.status(400).json({ message: 'Missing required fields' });
@@ -286,7 +313,7 @@ app.post('/api/quizzes/create', async (req, res) => {
 });
 
 // Get quiz by code
-app.get('/api/quizzes/code/:code', async (req, res) => {
+app.get('/api/quizzes/code/:code', requireDB, async (req, res) => {
   try {
     const quiz = await Quiz.findOne({ code: req.params.code.toUpperCase() });
     if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
@@ -315,7 +342,7 @@ app.get('/api/quizzes/code/:code', async (req, res) => {
 });
 
 // Get quiz by ID
-app.get('/api/quizzes/id/:id', async (req, res) => {
+app.get('/api/quizzes/id/:id', requireDB, async (req, res) => {
   try {
     const quiz = await Quiz.findById(req.params.id);
     if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
@@ -343,7 +370,7 @@ app.get('/api/quizzes/id/:id', async (req, res) => {
   }
 });
 
-app.get('/api/quizzes', async (req, res) => {
+app.get('/api/quizzes', requireDB, async (req, res) => {
   try {
     const quizzes = await Quiz.find().sort({ createdAt: -1 });
     res.status(200).json({ quizzes });
@@ -353,7 +380,7 @@ app.get('/api/quizzes', async (req, res) => {
 });
 
 // ============= PARTICIPANT ROUTES =============
-app.post('/api/participants/join', async (req, res) => {
+app.post('/api/participants/join', requireDB, async (req, res) => {
   try {
     const { quizCode, name, email, phoneNumber, college, branch, year } = req.body;
     if (!quizCode || !name || !email || !phoneNumber || !college || !branch || !year) {
@@ -404,7 +431,7 @@ app.get('/api/participants/:id', async (req, res) => {
 });
 
 // ============= RESPONSE ROUTES =============
-app.post('/api/responses/submit', async (req, res) => {
+app.post('/api/responses/submit', requireDB, async (req, res) => {
   try {
     const { participantId, questionId, selectedOptionId } = req.body;
     if (!participantId || !questionId) return res.status(400).json({ message: 'Missing required fields' });
@@ -442,7 +469,7 @@ app.get('/api/responses/participant/:participantId', async (req, res) => {
 });
 
 // ============= RESULTS & LEADERBOARD ROUTES =============
-app.get('/api/results/:quizId/:participantId', async (req, res) => {
+app.get('/api/results/:quizId/:participantId', requireDB, async (req, res) => {
   try {
     const { participantId } = req.params;
     const participant = await Participant.findById(participantId);
@@ -469,7 +496,7 @@ app.get('/api/results/:quizId/:participantId', async (req, res) => {
   }
 });
 
-app.get('/api/leaderboard/:quizId', async (req, res) => {
+app.get('/api/leaderboard/:quizId', requireDB, async (req, res) => {
   try {
     const leaderboard = await computeLeaderboard(req.params.quizId);
     res.status(200).json({ leaderboard });

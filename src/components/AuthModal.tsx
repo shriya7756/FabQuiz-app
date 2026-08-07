@@ -36,7 +36,7 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
         'service_xswukan',
         'template_9zoj6zr',
         { email, code, type: isSignup ? 'signup' : 'login' },
-        'gMme7aKVLMFXlNOzU'
+        'HYk2Tt6Rzmmq57cQT'
       );
       toast.success(`✅ ${isSignup ? 'Signup' : 'Login'} code sent to ${email}`, { duration: 6000 });
     } catch (error: unknown) {
