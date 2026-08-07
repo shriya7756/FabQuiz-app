@@ -13,7 +13,6 @@ interface AuthModalProps {
   onSuccess: () => void;
 }
 
-// Authentication Modal Component
 export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
@@ -28,63 +27,33 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
     e.preventDefault();
     setIsLoading(true);
 
-    // Generate a 6-digit code
     const code = Math.floor(100000 + Math.random() * 900000).toString();
     setGeneratedCode(code);
-
     const email = isSignup ? signupEmail : loginEmail;
 
     try {
-      // Send email using EmailJS
-      console.log('Attempting to send email with EmailJS...');
-      console.log('Service ID: service_xswukan');
-      console.log('Template ID: template_9zoj6zr');
-      console.log('Email:', email);
-      console.log('Code:', code);
-      console.log('Type:', isSignup ? 'signup' : 'login');
-
-      const result = await emailjs.send(
-        'service_xswukan', // Your EmailJS service ID
-        'template_9zoj6zr', // Your EmailJS template ID
-        {
-          email: email, // Changed from to_email to email
-          code: code,
-          type: isSignup ? 'signup' : 'login',
-        },
-        'gMme7aKVLMFXlNOzU' // Your EmailJS public key
+      await emailjs.send(
+        'service_xswukan',
+        'template_9zoj6zr',
+        { email, code, type: isSignup ? 'signup' : 'login' },
+        'gMme7aKVLMFXlNOzU'
       );
-
-      console.log('EmailJS result:', result);
-      toast.success(`✅ ${isSignup ? 'Signup' : 'Login'} code sent to ${email}`, { duration: 5000 });
-    } catch (error) {
-      console.error('Failed to send email:', error);
-      console.error('Error details:', {
-        message: error.message,
-        status: error.status,
-        text: error.text
-      });
-
-      // Show more specific error message
-      let errorMessage = 'Failed to send code. Please try again.';
-      if (error.status === 400) {
-        errorMessage = 'Invalid email service configuration. Please check your EmailJS setup.';
-      } else if (error.status === 429) {
-        errorMessage = 'Too many requests. Please wait a moment and try again.';
-      } else if (error.status === 500) {
-        errorMessage = 'Email service error. Please try again later.';
-      }
-
-      toast.error(errorMessage, { duration: 6000 });
-      setIsLoading(false);
-      return;
+      toast.success(`✅ ${isSignup ? 'Signup' : 'Login'} code sent to ${email}`, { duration: 6000 });
+    } catch (error: unknown) {
+      console.error('EmailJS error:', error);
+      // Dev bypass: show the code in a toast so admin can still log in
+      toast.info(
+        `📧 Email service unavailable — Your code is: ${code}`,
+        {
+          duration: 30000,
+          description: 'Copy this code and enter it below to proceed',
+        }
+      );
+      console.info(`🔑 DEV BYPASS — Auth code: ${code}`);
     }
 
-    if (isSignup) {
-      setShowCodeSignup(true);
-    } else {
-      setShowCodeLogin(true);
-    }
-
+    if (isSignup) setShowCodeSignup(true);
+    else setShowCodeLogin(true);
     setIsLoading(false);
   };
 
@@ -93,16 +62,15 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
     setIsLoading(true);
 
     if (loginCode === generatedCode) {
-      // Store authentication state
       localStorage.setItem('fabquiz_auth', JSON.stringify({
         email: loginEmail,
         authenticated: true,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }));
       toast.success("✅ Logged in successfully!", { duration: 4000 });
       onOpenChange(false);
       setIsLoading(false);
-      onSuccess(); // This will navigate to /admin/dashboard
+      onSuccess();
     } else {
       toast.error("❌ Invalid code. Please try again.", { duration: 5000 });
       setIsLoading(false);
@@ -114,35 +82,31 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
     setIsLoading(true);
 
     if (signupCode === generatedCode) {
-      // Store authentication state
       localStorage.setItem('fabquiz_auth', JSON.stringify({
         email: signupEmail,
         authenticated: true,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       }));
       toast.success("✅ Account created successfully!", { duration: 4000 });
       onOpenChange(false);
       setIsLoading(false);
-      onSuccess(); // This will navigate to /admin/dashboard
+      onSuccess();
     } else {
       toast.error("❌ Invalid code. Please try again.", { duration: 5000 });
       setIsLoading(false);
     }
   };
 
-
+  const resetModal = () => {
+    setShowCodeLogin(false);
+    setShowCodeSignup(false);
+    setLoginCode("");
+    setSignupCode("");
+    setGeneratedCode("");
+  };
 
   return (
-    <Dialog open={open} onOpenChange={(open) => {
-      onOpenChange(open);
-      if (!open) {
-        setShowCodeLogin(false);
-        setShowCodeSignup(false);
-        setLoginCode("");
-        setSignupCode("");
-        setGeneratedCode("");
-      }
-    }}>
+    <Dialog open={open} onOpenChange={(o) => { onOpenChange(o); if (!o) resetModal(); }}>
       <DialogContent className="bg-card border-2 border-accent/50 backdrop-blur-xl max-w-md">
         <DialogHeader>
           <DialogTitle className="text-2xl font-bold text-center bg-gradient-to-r from-accent to-primary bg-clip-text text-transparent">
@@ -165,7 +129,7 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
                 required
               />
               <p className="text-xs text-muted-foreground text-center">
-                Enter the 6-digit code sent to your email
+                Enter the 6-digit code sent to your email (check the notification above if email failed)
               </p>
             </div>
             <Button
@@ -175,16 +139,7 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
             >
               {isLoading ? "Verifying..." : "Login"}
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setShowCodeLogin(false);
-                setLoginCode("");
-                setGeneratedCode("");
-              }}
-              className="w-full"
-            >
+            <Button type="button" variant="ghost" onClick={() => { setShowCodeLogin(false); setLoginCode(""); setGeneratedCode(""); }} className="w-full">
               Back to Email
             </Button>
           </form>
@@ -203,7 +158,7 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
                 required
               />
               <p className="text-xs text-muted-foreground text-center">
-                Enter the 6-digit code sent to your email
+                Enter the 6-digit code (check the notification above if email failed)
               </p>
             </div>
             <Button
@@ -213,76 +168,55 @@ export const AuthModal = ({ open, onOpenChange, onSuccess }: AuthModalProps) => 
             >
               {isLoading ? "Creating..." : "Create Account"}
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              onClick={() => {
-                setShowCodeSignup(false);
-                setSignupCode("");
-                setGeneratedCode("");
-              }}
-              className="w-full"
-            >
+            <Button type="button" variant="ghost" onClick={() => { setShowCodeSignup(false); setSignupCode(""); setGeneratedCode(""); }} className="w-full">
               Back to Email
             </Button>
           </form>
         ) : (
           <Tabs defaultValue="login" className="w-full">
-          <TabsList className="grid w-full grid-cols-2 bg-secondary/50">
-            <TabsTrigger value="login" className="data-[state=active]:bg-primary">
-              Login
-            </TabsTrigger>
-            <TabsTrigger value="signup" className="data-[state=active]:bg-primary">
-              Signup
-            </TabsTrigger>
-          </TabsList>
+            <TabsList className="grid w-full grid-cols-2 bg-secondary/50">
+              <TabsTrigger value="login" className="data-[state=active]:bg-primary">Login</TabsTrigger>
+              <TabsTrigger value="signup" className="data-[state=active]:bg-primary">Signup</TabsTrigger>
+            </TabsList>
 
-          <TabsContent value="login" className="space-y-4 mt-6">
-            <form onSubmit={handleSendCode} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="login-email">Email</Label>
-                <Input
-                  id="login-email"
-                  type="email"
-                  value={loginEmail}
-                  onChange={(e) => setLoginEmail(e.target.value)}
-                  className="bg-input border-primary/30 focus:border-accent transition-all"
-                  required
-                />
-              </div>
-              <Button
-                type="submit"
-                disabled={isLoading}
-                className="w-full bg-gradient-to-r from-primary to-accent hover:shadow-lg hover:shadow-accent/50 transition-all"
-              >
-                {isLoading ? "Sending..." : "Send Login Code"}
-              </Button>
-            </form>
-          </TabsContent>
+            <TabsContent value="login" className="space-y-4 mt-6">
+              <form onSubmit={handleSendCode} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="login-email">Email</Label>
+                  <Input
+                    id="login-email"
+                    type="email"
+                    value={loginEmail}
+                    onChange={(e) => setLoginEmail(e.target.value)}
+                    className="bg-input border-primary/30 focus:border-accent transition-all"
+                    required
+                  />
+                </div>
+                <Button type="submit" disabled={isLoading} className="w-full bg-gradient-to-r from-primary to-accent hover:shadow-lg hover:shadow-accent/50 transition-all">
+                  {isLoading ? "Sending..." : "Send Login Code"}
+                </Button>
+              </form>
+            </TabsContent>
 
-          <TabsContent value="signup" className="space-y-4 mt-6">
-            <form onSubmit={(e) => handleSendCode(e, true)} className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="signup-email">Email</Label>
-                <Input
-                  id="signup-email"
-                  type="email"
-                  value={signupEmail}
-                  onChange={(e) => setSignupEmail(e.target.value)}
-                  className="bg-input border-primary/30 focus:border-accent transition-all"
-                  required
-                />
-              </div>
-              <Button
-                type="submit"
-                disabled={isLoading}
-                className="w-full bg-gradient-to-r from-primary to-accent hover:shadow-lg hover:shadow-accent/50 transition-all"
-              >
-                {isLoading ? "Sending..." : "Send Signup Code"}
-              </Button>
-            </form>
-          </TabsContent>
-        </Tabs>
+            <TabsContent value="signup" className="space-y-4 mt-6">
+              <form onSubmit={(e) => handleSendCode(e, true)} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="signup-email">Email</Label>
+                  <Input
+                    id="signup-email"
+                    type="email"
+                    value={signupEmail}
+                    onChange={(e) => setSignupEmail(e.target.value)}
+                    className="bg-input border-primary/30 focus:border-accent transition-all"
+                    required
+                  />
+                </div>
+                <Button type="submit" disabled={isLoading} className="w-full bg-gradient-to-r from-primary to-accent hover:shadow-lg hover:shadow-accent/50 transition-all">
+                  {isLoading ? "Sending..." : "Send Signup Code"}
+                </Button>
+              </form>
+            </TabsContent>
+          </Tabs>
         )}
       </DialogContent>
     </Dialog>
