@@ -4,6 +4,8 @@ const cors = require('cors');
 const path = require('path');
 const multer = require('multer');
 const fs = require('fs');
+const http = require('http');
+const { Server } = require('socket.io');
 require('dotenv').config();
 
 // Import models
@@ -15,14 +17,132 @@ const Response = require('./models/Response.cjs');
 const Feedback = require('./models/Feedback.cjs');
 
 const app = express();
+const server = http.createServer(app);
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// ============= SOCKET.IO SETUP =============
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+    credentials: true,
+  },
+  pingTimeout: 60000,
+  pingInterval: 25000,
+});
+
+// Track active quiz rooms: quizId -> Set of socket IDs
+const quizRooms = new Map();
+
+// Helper: compute leaderboard for a quiz
+async function computeLeaderboard(quizId) {
+  const participants = await Participant.find({ quizId });
+  const leaderboard = await Promise.all(
+    participants.map(async (p) => {
+      const responses = await Response.find({ participantId: p._id }).populate('questionId');
+      const score = responses.reduce((sum, r) => {
+        return sum + (r.isCorrect && r.questionId ? r.questionId.marks : 0);
+      }, 0);
+      const correct = responses.filter(r => r.isCorrect).length;
+      const accuracy = responses.length > 0 ? (correct / responses.length) * 100 : 0;
+      return {
+        participantId: p._id,
+        name: p.name,
+        score,
+        accuracy: Math.round(accuracy * 10) / 10,
+        correctAnswers: correct,
+        totalAnswers: responses.length,
+      };
+    })
+  );
+  leaderboard.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    return b.accuracy - a.accuracy;
+  });
+  return leaderboard.map((entry, idx) => ({ ...entry, rank: idx + 1 }));
+}
+
+// Helper: broadcast leaderboard update to quiz room
+async function broadcastLeaderboard(quizId) {
+  try {
+    const leaderboard = await computeLeaderboard(quizId);
+    io.to(`quiz:${quizId}`).emit('leaderboard_update', { quizId, leaderboard, timestamp: Date.now() });
+    console.log(`📡 Broadcast leaderboard for quiz ${quizId} to ${io.sockets.adapter.rooms.get(`quiz:${quizId}`)?.size || 0} clients`);
+    return leaderboard;
+  } catch (err) {
+    console.error('Failed to broadcast leaderboard:', err);
+    return [];
+  }
+}
+
+io.on('connection', (socket) => {
+  console.log(`🔌 Socket connected: ${socket.id}`);
+
+  // Participant/admin joins a quiz room
+  socket.on('join_quiz_room', async ({ quizId, participantId, name }) => {
+    const room = `quiz:${quizId}`;
+    socket.join(room);
+    console.log(`👥 ${name || socket.id} joined room ${room}`);
+
+    // Track room membership
+    if (!quizRooms.has(quizId)) quizRooms.set(quizId, new Set());
+    quizRooms.get(quizId).add(socket.id);
+
+    const participantCount = quizRooms.get(quizId).size;
+
+    // Notify room about new participant
+    io.to(room).emit('participant_joined', {
+      participantId,
+      name,
+      participantCount,
+      timestamp: Date.now(),
+    });
+
+    // Send current leaderboard to the newly joined client
+    if (mongoose.connection.readyState === 1) {
+      try {
+        const leaderboard = await computeLeaderboard(quizId);
+        socket.emit('leaderboard_update', { quizId, leaderboard, timestamp: Date.now() });
+      } catch (e) { /* ignore */ }
+    }
+  });
+
+  // Answer submitted event (can also be triggered from REST route)
+  socket.on('answer_submitted', async ({ quizId, participantId, questionId, optionId, isCorrect }) => {
+    console.log(`✅ Answer submitted via socket: participant=${participantId}, correct=${isCorrect}`);
+    // Broadcast updated leaderboard to all in room
+    if (mongoose.connection.readyState === 1 && quizId) {
+      await broadcastLeaderboard(quizId);
+    }
+  });
+
+  // Admin triggers quiz complete
+  socket.on('quiz_complete', ({ quizId }) => {
+    io.to(`quiz:${quizId}`).emit('quiz_completed', { quizId, timestamp: Date.now() });
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`🔌 Socket disconnected: ${socket.id}`);
+    // Clean up room tracking
+    quizRooms.forEach((socketIds, quizId) => {
+      if (socketIds.has(socket.id)) {
+        socketIds.delete(socket.id);
+        if (socketIds.size === 0) quizRooms.delete(quizId);
+      }
+    });
+  });
+
+  socket.on('error', (err) => {
+    console.error('Socket error:', err);
+  });
+});
+
+// ============= MIDDLEWARE =============
 app.use(cors({
   origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ limit: '10mb', extended: true }));
@@ -33,63 +153,55 @@ if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Serve uploaded files with logging
+// Serve uploaded files
 app.use('/uploads', (req, res, next) => {
   console.log('Image request:', req.url);
   next();
 }, express.static(uploadsDir, {
-  setHeaders: (res, path) => {
+  setHeaders: (res) => {
     res.set('Access-Control-Allow-Origin', '*');
     res.set('Cache-Control', 'public, max-age=31536000');
-  }
+  },
 }));
 
 // Configure multer for image uploads
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
-  },
+  destination: (req, file, cb) => cb(null, uploadsDir),
   filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, 'question-' + uniqueSuffix + path.extname(file.originalname));
-  }
+  },
 });
 
 const upload = multer({
-  storage: storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB limit
+  storage,
+  limits: { fileSize: 5 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|webp/;
-    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-    const mimetype = allowedTypes.test(file.mimetype);
-    if (extname && mimetype) {
+    const allowed = /jpeg|jpg|png|gif|webp/;
+    if (allowed.test(path.extname(file.originalname).toLowerCase()) && allowed.test(file.mimetype)) {
       cb(null, true);
     } else {
       cb(new Error('Only image files are allowed'));
     }
-  }
+  },
 });
 
-// MongoDB connection
+// ============= MONGODB CONNECTION =============
 if (process.env.MONGODB_URI) {
   mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log('Connected to MongoDB'))
-    .catch(err => console.error('MongoDB connection error:', err));
+    .then(() => console.log('✅ Connected to MongoDB'))
+    .catch(err => console.error('❌ MongoDB connection error:', err));
 } else {
-  console.log('No MONGODB_URI found, running without MongoDB');
+  console.warn('⚠️  No MONGODB_URI found — running without MongoDB (all DB calls will fail)');
 }
 
 // ============= AUTH ROUTES =============
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, name } = req.body;
-
-    if (!email) {
-      return res.status(400).json({ message: 'Email is required' });
-    }
+    if (!email) return res.status(400).json({ message: 'Email is required' });
 
     let user = await User.findOne({ email: email.toLowerCase() });
-    
     if (!user) {
       user = await User.create({
         email: email.toLowerCase(),
@@ -97,14 +209,8 @@ app.post('/api/auth/login', async (req, res) => {
         role: 'user',
       });
     }
-
     res.status(200).json({
-      user: {
-        id: user._id,
-        email: user.email,
-        name: user.name,
-        role: user.role,
-      }
+      user: { id: user._id, email: user.email, name: user.name, role: user.role },
     });
   } catch (error) {
     console.error('Login error:', error);
@@ -115,45 +221,22 @@ app.post('/api/auth/login', async (req, res) => {
 // ============= IMAGE UPLOAD ROUTE =============
 app.post('/api/upload/image', upload.single('image'), (req, res) => {
   try {
-    console.log('📸 Upload request received');
-    console.log('Content-Type:', req.headers['content-type']);
-    console.log('File:', req.file);
-    
-    if (!req.file) {
-      console.error('❌ No file in request');
-      return res.status(400).json({ message: 'No file uploaded' });
-    }
-    
+    if (!req.file) return res.status(400).json({ message: 'No file uploaded' });
     const imageUrl = `/uploads/${req.file.filename}`;
-    console.log('✅ Image uploaded successfully:', imageUrl);
-    console.log('📁 File saved to:', req.file.path);
-    console.log('📊 File size:', req.file.size, 'bytes');
-    
-    res.status(200).json({ 
-      imageUrl,
-      filename: req.file.filename,
-      size: req.file.size
-    });
+    console.log('✅ Image uploaded:', imageUrl);
+    res.status(200).json({ imageUrl, filename: req.file.filename, size: req.file.size });
   } catch (error) {
-    console.error('❌ Image upload error:', error);
-    res.status(500).json({ 
-      message: 'Failed to upload image',
-      error: error.message 
-    });
+    console.error('Image upload error:', error);
+    res.status(500).json({ message: 'Failed to upload image', error: error.message });
   }
 });
 
-// Test endpoint to list uploaded images
+// List uploads
 app.get('/api/uploads/list', (req, res) => {
   try {
     const files = fs.readdirSync(uploadsDir);
-    res.status(200).json({ 
-      uploadsDir,
-      files,
-      count: files.length 
-    });
+    res.status(200).json({ uploadsDir, files, count: files.length });
   } catch (error) {
-    console.error('List uploads error:', error);
     res.status(500).json({ message: 'Failed to list uploads' });
   }
 });
@@ -162,46 +245,22 @@ app.get('/api/uploads/list', (req, res) => {
 app.post('/api/quizzes/create', async (req, res) => {
   try {
     const { title, questions, adminId } = req.body;
+    if (!title || !questions || !adminId) return res.status(400).json({ message: 'Missing required fields' });
+    if (!Array.isArray(questions) || questions.length === 0) return res.status(400).json({ message: 'At least one question is required' });
 
-    if (!title || !questions || !adminId) {
-      return res.status(400).json({ message: 'Missing required fields' });
-    }
-
-    if (!Array.isArray(questions) || questions.length === 0) {
-      return res.status(400).json({ message: 'At least one question is required' });
-    }
-
-    // Generate unique quiz code
     const quizCode = Math.random().toString(36).substring(2, 8).toUpperCase();
+    const quiz = await Quiz.create({ code: quizCode, title, adminId, status: 'active' });
 
-    // Create quiz and questions in parallel for better performance
-    const quiz = await Quiz.create({
-      code: quizCode,
-      title,
-      adminId,
-      status: 'active',
-    });
-
-    // Batch create questions for better performance
     const questionData = questions.map((q, index) => ({
       quizId: quiz._id,
       questionText: q.question_text,
       imageUrl: q.image_url || null,
-      options: q.options.map((opt) => ({
-        optionText: opt.option_text,
-        isCorrect: opt.is_correct,
-      })),
+      options: q.options.map(opt => ({ optionText: opt.option_text, isCorrect: opt.is_correct })),
       marks: q.marks || 1,
       timeLimit: q.time_limit || 30,
       order: index,
     }));
-    
-    console.log('Creating questions with images:', questionData.map(q => ({
-      text: q.questionText.substring(0, 50),
-      hasImage: !!q.imageUrl,
-      imageUrl: q.imageUrl
-    })));
-    
+
     const questionDocs = await Question.insertMany(questionData);
 
     res.status(201).json({
@@ -218,7 +277,7 @@ app.post('/api/quizzes/create', async (req, res) => {
           marks: q.marks,
           timeLimit: q.timeLimit,
         })),
-      }
+      },
     });
   } catch (error) {
     console.error('Create quiz error:', error);
@@ -229,23 +288,10 @@ app.post('/api/quizzes/create', async (req, res) => {
 // Get quiz by code
 app.get('/api/quizzes/code/:code', async (req, res) => {
   try {
-    const { code } = req.params;
-
-    const quiz = await Quiz.findOne({ code: code.toUpperCase() });
-    
-    if (!quiz) {
-      return res.status(404).json({ message: 'Quiz not found' });
-    }
+    const quiz = await Quiz.findOne({ code: req.params.code.toUpperCase() });
+    if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
 
     const questions = await Question.find({ quizId: quiz._id }).sort({ order: 1 });
-
-    console.log('Returning quiz by code:', code);
-    console.log('Questions with images:', questions.map(q => ({
-      text: q.questionText.substring(0, 50),
-      hasImage: !!q.imageUrl,
-      imageUrl: q.imageUrl
-    })));
-
     res.status(200).json({
       quiz: {
         _id: quiz._id,
@@ -258,13 +304,9 @@ app.get('/api/quizzes/code/:code', async (req, res) => {
           image_url: q.imageUrl,
           marks: q.marks,
           time_limit: q.timeLimit,
-          options: q.options.map(o => ({ 
-            _id: o._id, 
-            option_text: o.optionText,
-            is_correct: o.isCorrect
-          })),
+          options: q.options.map(o => ({ _id: o._id, option_text: o.optionText, is_correct: o.isCorrect })),
         })),
-      }
+      },
     });
   } catch (error) {
     console.error('Get quiz by code error:', error);
@@ -275,24 +317,10 @@ app.get('/api/quizzes/code/:code', async (req, res) => {
 // Get quiz by ID
 app.get('/api/quizzes/id/:id', async (req, res) => {
   try {
-    const { id } = req.params;
-
-    const quiz = await Quiz.findById(id);
-    
-    if (!quiz) {
-      return res.status(404).json({ message: 'Quiz not found' });
-    }
+    const quiz = await Quiz.findById(req.params.id);
+    if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
 
     const questions = await Question.find({ quizId: quiz._id }).sort({ order: 1 });
-
-    console.log('📤 GET /api/quizzes/id/' + id);
-    console.log('📊 Questions from DB:', questions.map(q => ({
-      id: q._id,
-      text: q.questionText?.substring(0, 30),
-      hasImageUrl: !!q.imageUrl,
-      imageUrl: q.imageUrl || 'NO IMAGE URL IN DB'
-    })));
-
     res.status(200).json({
       quiz: {
         _id: quiz._id,
@@ -305,13 +333,9 @@ app.get('/api/quizzes/id/:id', async (req, res) => {
           image_url: q.imageUrl,
           marks: q.marks,
           time_limit: q.timeLimit,
-          options: q.options.map(o => ({ 
-            _id: o._id, 
-            option_text: o.optionText,
-            is_correct: o.isCorrect
-          })),
+          options: q.options.map(o => ({ _id: o._id, option_text: o.optionText, is_correct: o.isCorrect })),
         })),
-      }
+      },
     });
   } catch (error) {
     console.error('Get quiz by ID error:', error);
@@ -324,7 +348,6 @@ app.get('/api/quizzes', async (req, res) => {
     const quizzes = await Quiz.find().sort({ createdAt: -1 });
     res.status(200).json({ quizzes });
   } catch (error) {
-    console.error('Get quizzes error:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -333,69 +356,39 @@ app.get('/api/quizzes', async (req, res) => {
 app.post('/api/participants/join', async (req, res) => {
   try {
     const { quizCode, name, email, phoneNumber, college, branch, year } = req.body;
-
-    // Validate required fields
     if (!quizCode || !name || !email || !phoneNumber || !college || !branch || !year) {
       return res.status(400).json({ message: 'All fields are required' });
     }
 
-    // Validate email format
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ message: 'Invalid email format' });
-    }
-
-    // Validate phone number (basic validation)
-    if (phoneNumber.length < 10) {
-      return res.status(400).json({ message: 'Invalid phone number' });
-    }
+    if (!emailRegex.test(email)) return res.status(400).json({ message: 'Invalid email format' });
+    if (phoneNumber.length < 10) return res.status(400).json({ message: 'Invalid phone number' });
 
     const quiz = await Quiz.findOne({ code: quizCode.toUpperCase() });
-    
-    if (!quiz) {
-      return res.status(404).json({ message: 'Quiz not found' });
+    if (!quiz) return res.status(404).json({ message: 'Quiz not found' });
+
+    const existingParticipant = await Participant.findOne({ quizId: quiz._id, email: email.toLowerCase() });
+    if (existingParticipant) {
+      return res.status(409).json({ message: 'You have already joined this quiz', participantId: existingParticipant._id });
     }
 
-    // Check if participant already joined this quiz
-    const existingParticipant = await Participant.findOne({ 
-      quizId: quiz._id, 
-      email: email.toLowerCase() 
+    const participant = await Participant.create({
+      quizId: quiz._id, name, email: email.toLowerCase(), phoneNumber, college, branch, year,
     });
 
-    if (existingParticipant) {
-      return res.status(409).json({ 
-        message: 'You have already joined this quiz',
-        participantId: existingParticipant._id 
-      });
-    }
-
-    // Create new participant
-    const participant = await Participant.create({
-      quizId: quiz._id,
-      name,
-      email: email.toLowerCase(),
-      phoneNumber,
-      college,
-      branch,
-      year,
+    // Broadcast to quiz room via Socket.IO
+    io.to(`quiz:${quiz._id}`).emit('participant_joined', {
+      participantId: participant._id,
+      name: participant.name,
+      timestamp: Date.now(),
     });
 
     res.status(200).json({
-      participant: {
-        _id: participant._id,
-        name: participant.name,
-        email: participant.email,
-        quizId: quiz._id,
-      }
+      participant: { _id: participant._id, name: participant.name, email: participant.email, quizId: quiz._id },
     });
   } catch (error) {
     console.error('Join quiz error:', error);
-    
-    // Handle duplicate key error
-    if (error.code === 11000) {
-      return res.status(409).json({ message: 'You have already joined this quiz' });
-    }
-    
+    if (error.code === 11000) return res.status(409).json({ message: 'You have already joined this quiz' });
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -403,14 +396,9 @@ app.post('/api/participants/join', async (req, res) => {
 app.get('/api/participants/:id', async (req, res) => {
   try {
     const participant = await Participant.findById(req.params.id);
-    
-    if (!participant) {
-      return res.status(404).json({ message: 'Participant not found' });
-    }
-
+    if (!participant) return res.status(404).json({ message: 'Participant not found' });
     res.status(200).json({ participant });
   } catch (error) {
-    console.error('Get participant error:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -419,33 +407,25 @@ app.get('/api/participants/:id', async (req, res) => {
 app.post('/api/responses/submit', async (req, res) => {
   try {
     const { participantId, questionId, selectedOptionId } = req.body;
-
-    if (!participantId || !questionId) {
-      return res.status(400).json({ message: 'Missing required fields' });
-    }
+    if (!participantId || !questionId) return res.status(400).json({ message: 'Missing required fields' });
 
     const question = await Question.findById(questionId);
-    
-    if (!question) {
-      return res.status(404).json({ message: 'Question not found' });
-    }
+    if (!question) return res.status(404).json({ message: 'Question not found' });
 
     const selectedOption = question.options.id(selectedOptionId);
     const isCorrect = selectedOption ? selectedOption.isCorrect : false;
 
-    const response = await Response.create({
-      participantId,
-      questionId,
-      selectedOptionId,
-      isCorrect,
-    });
+    const response = await Response.create({ participantId, questionId, selectedOptionId, isCorrect });
 
-    res.status(200).json({
-      response: {
-        id: response._id,
-        isCorrect,
-      }
-    });
+    // Find the quiz for this question and broadcast real-time leaderboard update
+    const participant = await Participant.findById(participantId);
+    if (participant) {
+      const quizId = participant.quizId.toString();
+      // Broadcast updated leaderboard to all clients in this quiz's room
+      await broadcastLeaderboard(quizId);
+    }
+
+    res.status(200).json({ response: { id: response._id, isCorrect } });
   } catch (error) {
     console.error('Submit response error:', error);
     res.status(500).json({ message: 'Internal server error' });
@@ -454,13 +434,9 @@ app.post('/api/responses/submit', async (req, res) => {
 
 app.get('/api/responses/participant/:participantId', async (req, res) => {
   try {
-    const responses = await Response.find({
-      participantId: req.params.participantId,
-    }).populate('questionId');
-
+    const responses = await Response.find({ participantId: req.params.participantId }).populate('questionId');
     res.status(200).json({ responses });
   } catch (error) {
-    console.error('Get responses error:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
@@ -468,31 +444,23 @@ app.get('/api/responses/participant/:participantId', async (req, res) => {
 // ============= RESULTS & LEADERBOARD ROUTES =============
 app.get('/api/results/:quizId/:participantId', async (req, res) => {
   try {
-    const { quizId, participantId } = req.params;
-
+    const { participantId } = req.params;
     const participant = await Participant.findById(participantId);
     const responses = await Response.find({ participantId }).populate('questionId');
 
-    const score = responses.reduce((sum, r) => {
-      return sum + (r.isCorrect ? r.questionId.marks : 0);
-    }, 0);
-
-    const accuracy = responses.length > 0
-      ? (responses.filter(r => r.isCorrect).length / responses.length) * 100
-      : 0;
+    const score = responses.reduce((sum, r) => sum + (r.isCorrect && r.questionId ? r.questionId.marks : 0), 0);
+    const accuracy = responses.length > 0 ? (responses.filter(r => r.isCorrect).length / responses.length) * 100 : 0;
 
     res.status(200).json({
-      participant: {
-        name: participant.name,
-      },
+      participant: { name: participant ? participant.name : 'Unknown' },
       score,
       totalQuestions: responses.length,
       accuracy,
       responses: responses.map(r => ({
-        questionText: r.questionId.questionText,
+        questionText: r.questionId ? r.questionId.questionText : '',
         selectedOptionId: r.selectedOptionId,
         isCorrect: r.isCorrect,
-        options: r.questionId.options,
+        options: r.questionId ? r.questionId.options : [],
       })),
     });
   } catch (error) {
@@ -503,38 +471,7 @@ app.get('/api/results/:quizId/:participantId', async (req, res) => {
 
 app.get('/api/leaderboard/:quizId', async (req, res) => {
   try {
-    const { quizId } = req.params;
-
-    const participants = await Participant.find({ quizId });
-    
-    const leaderboard = await Promise.all(
-      participants.map(async (p) => {
-        const responses = await Response.find({
-          participantId: p._id,
-        }).populate('questionId');
-
-        const score = responses.reduce((sum, r) => {
-          return sum + (r.isCorrect ? r.questionId.marks : 0);
-        }, 0);
-
-        const correctCount = responses.filter(r => r.isCorrect).length;
-        const accuracy = responses.length > 0 ? (correctCount / responses.length) * 100 : 0;
-
-        return {
-          participantId: p._id,
-          name: p.name,
-          score,
-          accuracy,
-        };
-      })
-    );
-
-    // Sort by score, then accuracy
-    leaderboard.sort((a, b) => {
-      if (b.score !== a.score) return b.score - a.score;
-      return b.accuracy - a.accuracy;
-    });
-
+    const leaderboard = await computeLeaderboard(req.params.quizId);
     res.status(200).json({ leaderboard });
   } catch (error) {
     console.error('Get leaderboard error:', error);
@@ -546,71 +483,50 @@ app.get('/api/leaderboard/:quizId', async (req, res) => {
 app.post('/api/feedback', async (req, res) => {
   try {
     const { rating, comment } = req.body;
-
-    if (!rating) {
-      return res.status(400).json({ message: 'Rating is required' });
-    }
-
+    if (!rating) return res.status(400).json({ message: 'Rating is required' });
     await Feedback.create({ rating, comment });
-
-    res.status(201).json({
-      message: 'Feedback submitted successfully'
-    });
+    res.status(201).json({ message: 'Feedback submitted successfully' });
   } catch (error) {
-    console.error('Feedback error:', error);
     res.status(500).json({ message: 'Internal server error' });
   }
 });
 
-// Add a simple health check endpoint
+// ============= HEALTH CHECK =============
 app.get('/health', (req, res) => {
-  try {
-    res.status(200).json({ 
-      status: 'OK',
-      timestamp: new Date().toISOString(),
-      mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
-      uploadsDir: fs.existsSync(uploadsDir) ? 'exists' : 'missing',
-      endpoints: {
-        joinQuiz: '/api/join-quiz',
-        getParticipants: '/api/participants/:id',
-        submitResponse: '/api/responses/submit',
-        getResponses: '/api/responses/participant/:participantId',
-        getResults: '/api/results/:quizId/:participantId',
-        getLeaderboard: '/api/leaderboard/:quizId',
-        feedback: '/api/feedback'
-      }
-    });
-  } catch (error) {
-    res.status(500).json({ 
-      status: 'ERROR',
-      message: error.message 
-    });
-  }
+  const roomStats = {};
+  quizRooms.forEach((sockets, quizId) => { roomStats[quizId] = sockets.size; });
+  res.status(200).json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    uploadsDir: fs.existsSync(uploadsDir) ? 'exists' : 'missing',
+    websockets: {
+      totalConnections: io.engine.clientsCount,
+      activeRooms: Object.keys(roomStats).length,
+      roomParticipants: roomStats,
+    },
+  });
 });
 
+// ============= STATIC FILES =============
 app.use(express.static(path.join(__dirname, 'dist')));
 
-// Catch all handler: send back index.html for client-side routing
 app.use((req, res, next) => {
   if (req.method === 'GET' && !req.path.startsWith('/api/')) {
     const indexPath = path.join(__dirname, 'dist', 'index.html');
-    console.log('Serving index.html from:', indexPath);
-    try {
-      if (require('fs').existsSync(indexPath)) {
-        res.sendFile(indexPath);
-      } else {
-        console.error('index.html not found at:', indexPath);
-        res.status(404).send('Build files not found. Please run npm run build first.');
-      }
-    } catch (error) {
-      console.error('Error serving index.html:', error);
-      res.status(500).send('Internal server error');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Build files not found. Run npm run build first.');
     }
   } else {
     next();
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+// ============= START SERVER =============
+server.listen(PORT, () => {
+  console.log(`🚀 FabQuiz server running on port ${PORT}`);
+  console.log(`🔌 WebSocket (Socket.IO) ready`);
+  console.log(`📊 Health check: http://localhost:${PORT}/health`);
 });
